@@ -22,7 +22,11 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger("ml_serving")
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 class ModelLoadError(RuntimeError):
@@ -187,13 +191,13 @@ class InferenceService:
             raise PredictionError("model is not loaded")
 
         self._metrics.incr("predict_attempts")
+        t0 = time.perf_counter()
         logger.info(
-            "predict request_id=%s records=%d model_version=%s",
+            "predict start request_id=%s records=%d model_version=%s",
             request.request_id,
             len(request.records),
             version,
         )
-        t0 = time.perf_counter()
         try:
             raw_predictions = model.predict(request.records)
             predictions = self.validate_response(raw_predictions, len(request.records))
@@ -257,7 +261,11 @@ if FastAPI is not None:
             # run_in_threadpool offloads the blocking model.predict() call to
             # FastAPI's thread pool so concurrent requests are not serialised
             # behind the event loop.
+            # FAST
             response = await run_in_threadpool(service.predict, parsed)
+            # SLOW
+            # response = service.predict(parsed)
+
             return JSONResponse(content=response.to_dict())
         except ValueError as exc:
             logger.info("bad request: %s", exc)
