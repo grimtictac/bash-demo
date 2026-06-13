@@ -98,12 +98,23 @@ class InferenceService:
         with self._load_lock:
             self._metrics.incr("model_load_attempts")
             logger.info("loading model name=%s version=%s", self._model_name, self._model_version)
-            new_model = self._repository.load(self._model_name, self._model_version)
+            try:
+                new_model = self._repository.load(self._model_name, self._model_version)
+            except Exception as exc:
+                self._metrics.incr("model_load_failure")
+                logger.error(
+                    "model load failed name=%s version=%s",
+                    self._model_name,
+                    self._model_version,
+                    exc_info=True,
+                )
+                raise ModelLoadError(f"failed to load model {self._model_name!r}") from exc
             with self._swap_lock:
                 if self._current_model is not None:
                     self._previous_model = self._current_model
                 self._current_model = new_model
             self._metrics.incr("model_load_success")
+            logger.info("model loaded name=%s version=%s", self._model_name, self._model_version)
 
     def rollback(self) -> bool:
         with self._swap_lock:
