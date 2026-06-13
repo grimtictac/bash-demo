@@ -9,12 +9,14 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequ
 
 try:
     from fastapi import FastAPI, HTTPException, Request
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import JSONResponse
 except Exception:  # pragma: no cover
     FastAPI = None  # type: ignore
     HTTPException = Exception  # type: ignore
     Request = object  # type: ignore
     JSONResponse = None  # type: ignore
+    run_in_threadpool = None  # type: ignore
 
 
 logger = logging.getLogger("ml_serving")
@@ -183,7 +185,10 @@ if FastAPI is not None:
         try:
             payload = await request.json()
             parsed = service.validate_request(payload)
-            response = service.predict(parsed)
+            # run_in_threadpool offloads the blocking model.predict() call to
+            # FastAPI's thread pool so concurrent requests are not serialised
+            # behind the event loop.
+            response = await run_in_threadpool(service.predict, parsed)
             return JSONResponse(content=response.to_dict())
         except ValueError as exc:
             logger.info("bad request: %s", exc)
