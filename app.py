@@ -85,22 +85,28 @@ class InferenceService:
         self._model_name = model_name
         self._model_version = model_version
         self._metrics = metrics or Metrics()
-        self._lock = threading.RLock()
+        # _swap_lock guards only the model pointer swap — held for microseconds,
+        # never during repository I/O or model.predict().
+        self._swap_lock = threading.Lock()
+        # _load_lock serialises concurrent load_model() calls so two simultaneous
+        # loads don't race on the previous/current slot assignment.
+        self._load_lock = threading.Lock()
         self._current_model: Optional[ModelProtocol] = None
         self._previous_model: Optional[ModelProtocol] = None
 
     def load_model(self) -> None:
-        with self._lock:
+        with self._load_lock:
             self._metrics.incr("model_load_attempts")
             logger.info("loading model name=%s version=%s", self._model_name, self._model_version)
             new_model = self._repository.load(self._model_name, self._model_version)
-            if self._current_model is not None:
-                self._previous_model = self._current_model
-            self._current_model = new_model
+            with self._swap_lock:
+                if self._current_model is not None:
+                    self._previous_model = self._current_model
+                self._current_model = new_model
             self._metrics.incr("model_load_success")
 
     def rollback(self) -> bool:
-        with self._lock:
+        with self._swap_lock:
             if self._previous_model is None:
                 self._metrics.incr("rollback_noop")
                 return False
@@ -134,7 +140,7 @@ class InferenceService:
         return result
 
     def predict(self, request: PredictionRequest) -> PredictionResponse:
-        with self._lock:
+        with self._swap_lock:
             model = self._current_model
         if model is None:
             self._metrics.incr("predict_unavailable")
