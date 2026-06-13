@@ -124,8 +124,13 @@ class InferenceService:
             if self._previous_model is None:
                 self._metrics.incr("rollback_noop")
                 return False
-            self._current_model, self._previous_model = self._previous_model, self._current_model
-            self._current_version, self._previous_version = self._previous_version, self._current_version
+            # Restore previous and clear the slot. A swap would let a second
+            # rollback toggle back to the bad model; clearing forces a fresh
+            # load before another rollback target is available.
+            self._current_model = self._previous_model
+            self._current_version = self._previous_version
+            self._previous_model = None
+            self._previous_version = None
         self._metrics.incr("rollback_success")
         logger.warning(
             "rolled back model name=%s to version=%s",
