@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
@@ -161,6 +162,10 @@ class InferenceService:
         result = list(predictions)
         if len(result) != expected_len:
             raise PredictionError("prediction count does not match input count")
+        for i, pred in enumerate(result):
+            if pred is None:
+                raise PredictionError(f"predictions[{i}] is None")
+            _check_finite(pred, f"predictions[{i}]")
         return result
 
     def predict(self, request: PredictionRequest) -> PredictionResponse:
@@ -199,6 +204,18 @@ class InferenceService:
     @property
     def metrics(self) -> Metrics:
         return self._metrics
+
+
+def _check_finite(value: Any, path: str) -> None:
+    """Recursively assert that all float values in a prediction are finite."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise PredictionError(f"non-finite value at {path}")
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _check_finite(v, f"{path}.{k}")
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            _check_finite(v, f"{path}[{i}]")
 
 
 class DummyRepository:
