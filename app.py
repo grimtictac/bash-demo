@@ -92,7 +92,9 @@ class InferenceService:
         # loads don't race on the previous/current slot assignment.
         self._load_lock = threading.Lock()
         self._current_model: Optional[ModelProtocol] = None
+        self._current_version: Optional[str] = None
         self._previous_model: Optional[ModelProtocol] = None
+        self._previous_version: Optional[str] = None
 
     def load_model(self) -> None:
         with self._load_lock:
@@ -110,9 +112,10 @@ class InferenceService:
                 )
                 raise ModelLoadError(f"failed to load model {self._model_name!r}") from exc
             with self._swap_lock:
-                if self._current_model is not None:
-                    self._previous_model = self._current_model
+                self._previous_model = self._current_model
+                self._previous_version = self._current_version
                 self._current_model = new_model
+                self._current_version = self._model_version
             self._metrics.incr("model_load_success")
             logger.info("model loaded name=%s version=%s", self._model_name, self._model_version)
 
@@ -122,9 +125,14 @@ class InferenceService:
                 self._metrics.incr("rollback_noop")
                 return False
             self._current_model, self._previous_model = self._previous_model, self._current_model
-            self._metrics.incr("rollback_success")
-            logger.warning("rolled back to previous model name=%s version=%s", self._model_name, self._model_version)
-            return True
+            self._current_version, self._previous_version = self._previous_version, self._current_version
+        self._metrics.incr("rollback_success")
+        logger.warning(
+            "rolled back model name=%s to version=%s",
+            self._model_name,
+            self._current_version,
+        )
+        return True
 
     def validate_request(self, payload: Any) -> PredictionRequest:
         if not isinstance(payload, dict):
@@ -153,12 +161,18 @@ class InferenceService:
     def predict(self, request: PredictionRequest) -> PredictionResponse:
         with self._swap_lock:
             model = self._current_model
+            version = self._current_version
         if model is None:
             self._metrics.incr("predict_unavailable")
             raise PredictionError("model is not loaded")
 
         self._metrics.incr("predict_attempts")
-        logger.info("predict request_id=%s records=%d", request.request_id, len(request.records))
+        logger.info(
+            "predict request_id=%s records=%d model_version=%s",
+            request.request_id,
+            len(request.records),
+            version,
+        )
         try:
             raw_predictions = model.predict(request.records)
             predictions = self.validate_response(raw_predictions, len(request.records))
@@ -166,7 +180,7 @@ class InferenceService:
             return PredictionResponse(
                 predictions=predictions,
                 model_name=self._model_name,
-                model_version=self._model_version,
+                model_version=version,
                 request_id=request.request_id,
             )
         except PredictionError:
