@@ -173,7 +173,7 @@ class TestValidateResponse:
 class TestLoadModel:
     def test_healthy_loads_successfully(self, svc):
         svc.load_model()
-        assert svc._current_model is not None
+        assert svc._slot is not None
 
     def test_load_increments_success_metric(self, svc):
         svc.load_model()
@@ -194,13 +194,13 @@ class TestLoadModel:
         """A failed load must leave the currently-serving model intact."""
         svc = InferenceService(repo, model_name="healthy")
         svc.load_model()
-        good_model = svc._current_model
+        good_slot = svc._slot
 
         svc._model_name = "load_failure"
         with pytest.raises(ModelLoadError):
             svc.load_model()
 
-        assert svc._current_model is good_model
+        assert svc._slot is good_slot
 
     def test_predict_unavailable_before_load(self, svc):
         req = PredictionRequest(records=[{"a": 1}])
@@ -254,7 +254,7 @@ class TestPredictionScenarios:
         with pytest.raises(PredictionError):
             svc.predict(req)
         # Service should still be queryable
-        assert svc._current_model is not None
+        assert svc._slot is not None
 
     def test_slow_model_produces_valid_output(self, repo):
         svc = InferenceService(repo, model_name="slow")
@@ -300,13 +300,13 @@ class TestRollback:
     def test_rollback_restores_previous_model_instance(self, repo):
         svc = InferenceService(repo, model_name="healthy")
         svc.load_model()
-        first = svc._current_model
+        first_slot = svc._slot
 
         svc.load_model()
-        assert svc._current_model is not first
+        assert svc._slot is not first_slot
 
         svc.rollback()
-        assert svc._current_model is first
+        assert svc._slot is first_slot
 
     def test_rollback_twice_second_is_noop(self, svc):
         svc.load_model()
@@ -318,7 +318,7 @@ class TestRollback:
         """A failed load should not corrupt the rollback slot."""
         svc = InferenceService(repo, model_name="healthy")
         svc.load_model()
-        good_model = svc._current_model
+        good_slot = svc._slot
 
         svc._model_name = "load_failure"
         with pytest.raises(ModelLoadError):
@@ -326,7 +326,7 @@ class TestRollback:
 
         # Rollback should report nothing to roll back (only one successful load)
         assert svc.rollback() is False
-        assert svc._current_model is good_model
+        assert svc._slot is good_slot
 
     def test_rollback_version_tracking(self, repo):
         """model_version in responses should reflect the rolled-back model."""
@@ -335,10 +335,10 @@ class TestRollback:
 
         svc._model_version = "v2"
         svc.load_model()
-        assert svc._current_version == "v2"
+        assert svc._slot.version == "v2"
 
         svc.rollback()
-        assert svc._current_version == "v1"
+        assert svc._slot.version == "v1"
 
 
 # ---------------------------------------------------------------------------

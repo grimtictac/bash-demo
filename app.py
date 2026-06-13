@@ -48,6 +48,12 @@ class ModelRepositoryClient(Protocol):
 
 
 @dataclass(frozen=True)
+class ModelSlot:
+    model: ModelProtocol
+    version: Optional[str]
+
+
+@dataclass(frozen=True)
 class PredictionRequest:
     records: List[Dict[str, Any]]
     request_id: Optional[str] = None
@@ -100,16 +106,13 @@ class InferenceService:
         self._model_name = model_name
         self._model_version = model_version
         self._metrics = metrics or Metrics()
-        # _swap_lock guards only the model pointer swap — held for microseconds,
-        # never during repository I/O or model.predict().
-        self._swap_lock = threading.Lock()
         # _load_lock serialises concurrent load_model() calls so two simultaneous
-        # loads don't race on the previous/current slot assignment.
+        # loads don't race on the _previous_slot assignment.
         self._load_lock = threading.Lock()
-        self._current_model: Optional[ModelProtocol] = None
-        self._current_version: Optional[str] = None
-        self._previous_model: Optional[ModelProtocol] = None
-        self._previous_version: Optional[str] = None
+        # Single reference assignment is atomic in CPython, so predict() can
+        # read _slot without a lock and always sees a consistent model+version.
+        self._slot: Optional[ModelSlot] = None
+        self._previous_slot: Optional[ModelSlot] = None
 
     def load_model(self) -> None:
         with self._load_lock:
@@ -126,31 +129,22 @@ class InferenceService:
                     exc_info=True,
                 )
                 raise ModelLoadError(f"failed to load model {self._model_name!r}") from exc
-            with self._swap_lock:
-                self._previous_model = self._current_model
-                self._previous_version = self._current_version
-                self._current_model = new_model
-                self._current_version = self._model_version
+            self._previous_slot = self._slot
+            self._slot = ModelSlot(new_model, self._model_version)
             self._metrics.incr("model_load_success")
             logger.info("model loaded name=%s version=%s", self._model_name, self._model_version)
 
     def rollback(self) -> bool:
-        with self._swap_lock:
-            if self._previous_model is None:
-                self._metrics.incr("rollback_noop")
-                return False
-            # Restore previous and clear the slot. A swap would let a second
-            # rollback toggle back to the bad model; clearing forces a fresh
-            # load before another rollback target is available.
-            self._current_model = self._previous_model
-            self._current_version = self._previous_version
-            self._previous_model = None
-            self._previous_version = None
+        if self._previous_slot is None:
+            self._metrics.incr("rollback_noop")
+            return False
+        self._slot = self._previous_slot
+        self._previous_slot = None
         self._metrics.incr("rollback_success")
         logger.warning(
             "rolled back model name=%s to version=%s",
             self._model_name,
-            self._current_version,
+            self._slot.version,
         )
         return True
 
@@ -183,10 +177,8 @@ class InferenceService:
         return result
 
     def predict(self, request: PredictionRequest) -> PredictionResponse:
-        with self._swap_lock:
-            model = self._current_model
-            version = self._current_version
-        if model is None:
+        slot = self._slot
+        if slot is None:
             self._metrics.incr("predict_unavailable")
             raise PredictionError("model is not loaded")
 
@@ -196,16 +188,16 @@ class InferenceService:
             "predict start request_id=%s records=%d model_version=%s",
             request.request_id,
             len(request.records),
-            version,
+            slot.version,
         )
         try:
-            raw_predictions = model.predict(request.records)
+            raw_predictions = slot.model.predict(request.records)
             predictions = self.validate_response(raw_predictions, len(request.records))
             self._metrics.incr("predict_success")
             return PredictionResponse(
                 predictions=predictions,
                 model_name=self._model_name,
-                model_version=version,
+                model_version=slot.version,
                 request_id=request.request_id,
             )
         except PredictionError:
@@ -261,10 +253,7 @@ if FastAPI is not None:
             # run_in_threadpool offloads the blocking model.predict() call to
             # FastAPI's thread pool so concurrent requests are not serialised
             # behind the event loop.
-            # FAST
             response = await run_in_threadpool(service.predict, parsed)
-            # SLOW
-            # response = service.predict(parsed)
 
             return JSONResponse(content=response.to_dict())
         except ValueError as exc:
