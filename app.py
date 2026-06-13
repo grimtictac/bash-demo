@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 
@@ -66,12 +67,21 @@ class PredictionResponse:
         return payload
 
 
-@dataclass
 class Metrics:
-    counters: Dict[str, int] = field(default_factory=dict)
+    """Thread-safe counters for operational visibility."""
+
+    def __init__(self) -> None:
+        self._counters: Dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def incr(self, name: str, value: int = 1) -> None:
-        self.counters[name] = self.counters.get(name, 0) + value
+        with self._lock:
+            self._counters[name] = self._counters.get(name, 0) + value
+
+    @property
+    def counters(self) -> Dict[str, int]:
+        with self._lock:
+            return dict(self._counters)
 
 
 class InferenceService:
@@ -183,6 +193,7 @@ class InferenceService:
             len(request.records),
             version,
         )
+        t0 = time.perf_counter()
         try:
             raw_predictions = model.predict(request.records)
             predictions = self.validate_response(raw_predictions, len(request.records))
@@ -200,6 +211,11 @@ class InferenceService:
             self._metrics.incr("predict_failure")
             logger.exception("prediction failed request_id=%s", request.request_id)
             raise PredictionError("prediction failed") from exc
+        finally:
+            self._metrics.incr(
+                "predict_latency_ms_total",
+                int((time.perf_counter() - t0) * 1000),
+            )
 
     @property
     def metrics(self) -> Metrics:
