@@ -16,6 +16,10 @@ The service must serve the healthy model and fail safely on the broken ones:
 Other failure modes exist that are not represented here. Thinking about what
 else a model can do once it has loaded is part of the exercise.
 
+Additional stubs added during the refactor to cover those failure modes:
+  - "nan"           loads fine, returns NaN scores — caught by _check_finite
+  - "none"          loads fine, returns None predictions — caught by validate_response
+
 Nothing here should need to change. Wire it into your service and tests.
 """
 
@@ -53,6 +57,20 @@ class SlowModel:
         return [{"score": float(len(item))} for item in features]
 
 
+class NanModel:
+    """Returns NaN scores — loads fine but fails semantic output validation."""
+
+    def predict(self, features: Sequence[Dict[str, Any]]) -> Sequence[Any]:
+        return [{"score": float("nan")} for _ in features]
+
+
+class NoneModel:
+    """Returns None predictions — loads fine but fails None check in validate_response."""
+
+    def predict(self, features: Sequence[Dict[str, Any]]) -> Sequence[Any]:
+        return [None for _ in features]
+
+
 class ScenarioRepository:
     """
     Stand in for the production model repository.
@@ -60,6 +78,8 @@ class ScenarioRepository:
         load("healthy")       -> HealthyModel
         load("wrong_shape")   -> WrongShapeModel
         load("slow")          -> SlowModel
+        load("nan")           -> NanModel
+        load("none")          -> NoneModel
         load("load_failure")  -> raises
 
     The version argument is accepted and ignored, matching the production
@@ -73,6 +93,10 @@ class ScenarioRepository:
             return WrongShapeModel()
         if model_name == "slow":
             return SlowModel()
+        if model_name == "nan":
+            return NanModel()
+        if model_name == "none":
+            return NoneModel()
         if model_name == "load_failure":
             raise RuntimeError(f"failed to load model {model_name!r} from repository")
         raise RuntimeError(f"unknown model {model_name!r}")

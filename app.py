@@ -173,7 +173,9 @@ class InferenceService:
             raise PredictionError("model returned an invalid prediction payload")
         result = list(predictions)
         if len(result) != expected_len:
-            raise PredictionError("prediction count does not match input count")
+            raise PredictionError(
+                f"prediction count does not match input count (expected {expected_len}, got {len(result)})"
+            )
         for i, pred in enumerate(result):
             if pred is None:
                 raise PredictionError(f"predictions[{i}] is None")
@@ -225,7 +227,7 @@ class InferenceService:
 def _check_finite(value: Any, path: str) -> None:
     """Recursively assert that all float values in a prediction are finite."""
     if isinstance(value, float) and not math.isfinite(value):
-        raise PredictionError(f"non-finite value at {path}")
+        raise PredictionError(f"non-finite value at {path} (got {value!r})")
     elif isinstance(value, dict):
         for k, v in value.items():
             _check_finite(v, f"{path}.{k}")
