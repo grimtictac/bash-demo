@@ -49,7 +49,7 @@ class SlowModel:
     """
 
     def predict(self, features: Sequence[Dict[str, Any]]) -> Sequence[Any]:
-        time.sleep(0.05)
+        time.sleep(0.15)  # bumped from 0.05 to make serialisation more visible in demos
         return [{"score": float(len(item))} for item in features]
 
 
