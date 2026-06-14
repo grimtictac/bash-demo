@@ -22,22 +22,22 @@
 ## What changed and why
 
 **Concurrency fix (critical):**
-The original `async def predict_endpoint` called `service.predict()` synchronously. `model.predict()` is a blocking call (demonstrated by `SlowModel.time.sleep(0.05)`). In an `async def` handler, blocking calls stall the event loop, serialising all in-flight requests behind the one that is executing. Fixed with `await run_in_threadpool(service.predict, parsed)`, which delegates inference to FastAPI's default anyio thread pool so the event loop remains free for other requests.
+The original `async def predict_endpoint` called `service.predict()` synchronously. `model.predict()` is a blocking call (demonstrated by `SlowModel.time.sleep(0.15)`). In an `async def` handler, blocking calls stall the event loop, serialising all in-flight requests behind the one that is executing. Fixed with `await run_in_threadpool(service.predict, parsed)`, which delegates inference to FastAPI's default anyio thread pool so the event loop remains free for other requests.
 
-The service-layer lock was already correct: only the pointer read (`model = self._current_model`) was held under the lock, not the inference call itself. The serialisation was purely in the HTTP layer.
+**Swap safety: `ModelSlot` and lock separation:**
+The original held a single `_lock` for the entire `load_model()` call, including the slow `repository.load()` I/O. Any `predict()` had to acquire the same lock just to read the model reference, so a long load would stall all concurrent requests for its full duration.
 
-**Load no longer holds any lock during I/O:**
-The original held `_lock` for the entire `load_model()` call (including the slow `repository.load()` I/O). I separated concerns into two locks:
-- `_load_lock` serialises concurrent `load_model()` calls, held for the full duration of loading.
-- `_swap_lock` (formerly `_lock`, renamed for clarity) protects the model pointer swap only — held for microseconds, never during I/O or inference.
+The fix has two parts:
 
-This means a model load can never stall in-flight predict calls, even if the load takes minutes.
+1. `_load_lock` serialises concurrent `load_model()` calls. `predict()` never acquires it, so loads and predictions run fully concurrently.
+
+2. `ModelSlot` — a frozen dataclass bundling `model` and `version` — replaces four separate variables (`_current_model`, `_current_version`, `_previous_model`, `_previous_version`). A single reference assignment is atomic in CPython, so `predict()` reads `slot = self._slot` without any lock and always sees a consistent model+version pair. With separate variables a swap could write the new model before the new version, leaving a predict thread holding a mismatched pair; `ModelSlot` eliminates that window entirely.
 
 **Failed load never replaces a good model:**
 The original code was already safe here (exception exits before the assignment). I made it explicit: the swap is only performed after a successful load. A `ModelLoadError` is raised on failure with a dedicated metric (`model_load_failure`).
 
-**Version tracking per slot:**
-Added `_current_version` / `_previous_version` alongside the model slots. The response now reports the version that actually served the request, which changes correctly after a rollback.
+**Version reflects the slot that actually served the request:**
+`ModelSlot` carries the version alongside the model. The response reports the version from the captured slot, so it is always correct — including after a rollback, where the original always returned the init-time version string regardless of which model was running.
 
 **Semantic output validation:**
 Extended `validate_response` to reject `None` predictions and recursively check for `NaN` / `Inf` in any float values. The original only checked shape. A model returning `{"score": float("nan")}` would have passed through to the caller.
@@ -64,7 +64,8 @@ Added `predict_latency_ms_total` (a cumulative sum). Mean latency = `predict_lat
 | Decision | Upside | Downside |
 |---|---|---|
 | `run_in_threadpool` for inference | Event loop stays free; concurrent requests proceed in parallel | anyio thread pool has a fixed cap; pathological load can saturate it |
-| `_load_lock` serialises loads | No slot-assignment race between two simultaneous loads | A slow load blocks any concurrent `load_model()` call for its duration |
+| `_load_lock` serialises loads | No race between two simultaneous loads | A slow load blocks any concurrent `load_model()` call for its duration |
+| `ModelSlot` atomic reference | No lock needed in `predict()`; no torn model/version read | Relies on CPython reference assignment being atomic; not a language guarantee |
 | Rollback clears previous slot | No accidental toggle back to a bad model | Operator must trigger a fresh load to establish a new rollback target |
 | NaN/Inf check on every prediction | Catches a common silent failure mode from numeric models | O(predictions × fields) traversal; negligible at typical batch sizes |
 
@@ -73,7 +74,7 @@ Added `predict_latency_ms_total` (a cumulative sum). Mean latency = `predict_lat
 ## What I'd do next with more time
 
 1. **Request-level tracing.** Propagate `request_id` (or a generated trace ID) through every log line and into `PredictionResponse`.
-2. **Unhealthy health check.** Return `503` from `/health` when `_current_model is None`.
+2. **Unhealthy health check.** Return `503` from `/health` when `_slot is None` (no model loaded).
 3. **Configurable output schema validation.** JSON Schema or a Pydantic model passed in at service construction, instead of heuristic NaN/Inf checks.
 4. **Background model loading** with a status endpoint. Operators should not have to block on a slow load; a `POST /admin/load → 202 Accepted` pattern with `GET /admin/load/status` is the natural extension.
 5. **Explicit in-flight tracking.** A counter of requests currently using each model slot, so we can log how long after a swap the old model is still referenced.
