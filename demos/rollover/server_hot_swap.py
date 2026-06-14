@@ -1,6 +1,6 @@
 """Demo shim: SlowModel with a versioned reload endpoint.
 
-Boot with: uvicorn demo_rollover:app
+Boot with: uvicorn demos.rollover.server_hot_swap:app
 
 Adds POST /demo/load?version=<v> so the rollover harness can trigger
 a live model swap while requests are in flight.

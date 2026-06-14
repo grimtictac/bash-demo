@@ -3,8 +3,8 @@
 Requests are dispatched to the thread pool so the event loop stays free
 and all concurrent requests run simultaneously.
 
-    uvicorn demo_slow_parallel:app     ← parallel (fixed)
-    uvicorn demo_slow_serialised:app   ← serialised (broken)
+    uvicorn demos.serialisation.server_parallel:app     ← parallel (fixed)
+    uvicorn demos.serialisation.server_serialised:app   ← serialised (broken)
 """
 
 import app

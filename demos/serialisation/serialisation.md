@@ -65,9 +65,9 @@ response = await run_in_threadpool(service.predict, parsed)
 
 ## Proof
 
-The service was run against `SlowModel` (150ms per call) with 50 concurrent requests using `demo_harness.py`.
+The service was run against `SlowModel` (150ms per call) with 50 concurrent requests using `client_load_test.py`.
 
-**Serialised server** (`demo_slow_serialised:app`) — requests processed one at a time:
+**Serialised server** (`server_serialised:app`) — requests processed one at a time:
 
 ```
 calls            :  50
@@ -78,7 +78,7 @@ avg per call     :  3891.8 ms
 max single call  :  7260.9 ms
 ```
 
-**Parallel server** (`demo_slow_parallel:app`) — all 50 requests run concurrently:
+**Parallel server** (`server_parallel:app`) — all 50 requests run concurrently:
 
 ```
 calls            :  50
@@ -109,14 +109,19 @@ source .venv/bin/activate
 
 ```bash
 # broken: blocking handler, requests serialise
-uvicorn demo_slow_serialised:app
+uvicorn demos.serialisation.server_serialised:app
 
 # fixed: thread-pool handler, requests run concurrently
-uvicorn demo_slow_parallel:app
+uvicorn demos.serialisation.server_parallel:app
+```
+
+To stop the server:
+```bash
+pkill -f uvicorn
 ```
 
 **Terminal 2 — run the harness:**
 
 ```bash
-python demo_harness.py 50
+python -m demos.serialisation.client_load_test 50
 ```

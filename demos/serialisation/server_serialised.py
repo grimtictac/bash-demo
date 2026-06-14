@@ -5,8 +5,8 @@ blocking the event loop so all requests are processed one at a time.
 
 Use this to demonstrate the serialisation problem without switching branches.
 
-    uvicorn demo_slow_serialised:app   ← serialised (broken)
-    uvicorn demo_slow:app              ← parallel (fixed)
+    uvicorn demos.serialisation.server_serialised:app   ← serialised (broken)
+    uvicorn demos.serialisation.server_parallel:app     ← parallel (fixed)
 """
 
 import app as app_module

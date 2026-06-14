@@ -7,8 +7,8 @@ returned. Trigger the swap yourself from another terminal:
 
 Watch the version change in the output.
 
-Usage: python demo_rollover_manual.py
-       (server: uvicorn demo_rollover:app)
+Usage: python demos/rollover/client_version_watch.py
+       (server: uvicorn demos.rollover.server_hot_swap:app)
 """
 
 import time

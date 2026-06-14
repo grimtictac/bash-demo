@@ -37,18 +37,27 @@ During a load, in-flight predictions continue against the current slot. When the
 
 ## Running the Demos
 
+```bash
+source .venv/bin/activate
+```
+
 ### Manual demo
 
 Watch the version change in real time as you trigger a swap.
 
 **Terminal 1:**
 ```bash
-uvicorn demo_rollover:app
+uvicorn demos.rollover.server_hot_swap:app
+```
+
+To stop the server:
+```bash
+pkill -f uvicorn
 ```
 
 **Terminal 2:**
 ```bash
-python demo_rollover_manual.py
+python demos/rollover/client_version_watch.py
 ```
 
 **Terminal 3** (while the harness is running):
@@ -62,16 +71,21 @@ The load takes 12 seconds. Responses continue uninterrupted on `v1` throughout, 
 
 ### Stall demo (broken behaviour)
 
-`demo_stall_on_swap.py` reproduces the original bug — a single lock held for the full load duration. Run it in place of `demo_rollover:app` and trigger a swap; the client freezes for 12 seconds.
+`server_stall_on_swap.py` reproduces the original bug — a single lock held for the full load duration. Run it in place of `server:app` and trigger a swap; the client freezes for 12 seconds.
 
 **Terminal 1:**
 ```bash
-uvicorn demo_stall_on_swap:app
+uvicorn demos.rollover.server_stall_on_swap:app
+```
+
+To stop the server:
+```bash
+pkill -f uvicorn
 ```
 
 **Terminal 2:**
 ```bash
-python demo_rollover_manual.py
+python demos/rollover/client_version_watch.py
 ```
 
 **Terminal 3:**

@@ -5,9 +5,9 @@ the slow repository.load() call. predict() must also acquire _lock to read
 _current_model, so any in-flight or incoming request blocks for the entire
 12-second load.
 
-Boot with: uvicorn demo_stall_on_swap:app
+Boot with: uvicorn demos.rollover.server_stall_on_swap:app
 
-Use the same demo_rollover_manual.py harness and trigger a swap:
+Use the same demos/rollover/client_version_watch.py harness and trigger a swap:
 
     curl -X POST "http://localhost:8000/demo/load?version=v2"
 

@@ -49,8 +49,12 @@ Any bad prediction raises `PredictionError`, which the HTTP handler returns as a
 
 ## Running the Demo
 
+```bash
+source .venv/bin/activate
 ```
-python demo_validation.py
+
+```
+python -m demos.output_validation.validation
 ```
 
 Expected output (log lines omitted for clarity):

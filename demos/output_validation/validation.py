@@ -1,6 +1,6 @@
 """Demo: output validation catches NaN and None that the original service let through.
 
-    python demo_validation.py
+    python -m demos.output_validation.validation
 """
 
 from app import InferenceService, ModelSlot, PredictionError, PredictionRequest

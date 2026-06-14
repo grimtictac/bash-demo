@@ -6,7 +6,7 @@ vs sum of individual latencies.
 If inference parallelises:  wall-clock ~= single call latency
 If it serialises:           wall-clock ~= N * single call latency
 
-Usage: python demo_harness.py [N] [URL]
+Usage: python -m demos.serialisation.client_load_test [N] [URL]
 """
 
 import sys
