@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 
@@ -188,6 +189,7 @@ class InferenceService:
             raise PredictionError("model is not loaded")
 
         self._metrics.incr("predict_attempts")
+        t0 = time.perf_counter()
         logger.info(
             "predict start request_id=%s records=%d model_version=%s",
             request.request_id,
@@ -211,6 +213,11 @@ class InferenceService:
             self._metrics.incr("predict_failure")
             logger.exception("prediction failed request_id=%s", request.request_id)
             raise PredictionError("prediction failed") from exc
+        finally:
+            self._metrics.incr(
+                "predict_latency_ms_total",
+                int((time.perf_counter() - t0) * 1000),
+            )
 
     @property
     def metrics(self) -> Metrics:
