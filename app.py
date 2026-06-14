@@ -4,7 +4,7 @@ import copy
 import json
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 
 try:
@@ -16,10 +16,15 @@ except Exception:  # pragma: no cover
     HTTPException = Exception  # type: ignore
     Request = object  # type: ignore
     JSONResponse = None  # type: ignore
+    run_in_threadpool = None  # type: ignore
 
 
 logger = logging.getLogger("ml_serving")
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 class ModelLoadError(RuntimeError):
@@ -38,6 +43,12 @@ class ModelProtocol(Protocol):
 class ModelRepositoryClient(Protocol):
     def load(self, model_name: str, version: Optional[str] = None) -> ModelProtocol:
         ...
+
+
+@dataclass(frozen=True)
+class ModelSlot:
+    model: ModelProtocol
+    version: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -64,12 +75,21 @@ class PredictionResponse:
         return payload
 
 
-@dataclass
 class Metrics:
-    counters: Dict[str, int] = field(default_factory=dict)
+    """Thread-safe counters for operational visibility."""
+
+    def __init__(self) -> None:
+        self._counters: Dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def incr(self, name: str, value: int = 1) -> None:
-        self.counters[name] = self.counters.get(name, 0) + value
+        with self._lock:
+            self._counters[name] = self._counters.get(name, 0) + value
+
+    @property
+    def counters(self) -> Dict[str, int]:
+        with self._lock:
+            return dict(self._counters)
 
 
 class InferenceService:
@@ -84,29 +104,51 @@ class InferenceService:
         self._model_name = model_name
         self._model_version = model_version
         self._metrics = metrics or Metrics()
-        self._lock = threading.RLock()
-        self._current_model: Optional[ModelProtocol] = None
-        self._previous_model: Optional[ModelProtocol] = None
+        # _load_lock serialises concurrent load_model() calls so two simultaneous
+        # loads don't race on the _previous_slot assignment.
+        self._load_lock = threading.Lock()
+        # Single reference assignment is atomic in CPython, so predict() can
+        # read _slot without a lock and always sees a consistent model+version.
+        self._slot: Optional[ModelSlot] = None
+        self._previous_slot: Optional[ModelSlot] = None
 
     def load_model(self) -> None:
-        with self._lock:
+        with self._load_lock:
             self._metrics.incr("model_load_attempts")
-            logger.info("loading model name=%s version=%s", self._model_name, self._model_version)
-            new_model = self._repository.load(self._model_name, self._model_version)
-            if self._current_model is not None:
-                self._previous_model = self._current_model
-            self._current_model = new_model
+            logger.info("=" * 60)
+            logger.info("  LOAD START   name=%s  version=%s", self._model_name, self._model_version)
+            logger.info("=" * 60)
+            try:
+                new_model = self._repository.load(self._model_name, self._model_version)
+            except Exception as exc:
+                self._metrics.incr("model_load_failure")
+                logger.error(
+                    "model load failed name=%s version=%s",
+                    self._model_name,
+                    self._model_version,
+                    exc_info=True,
+                )
+                raise ModelLoadError(f"failed to load model {self._model_name!r}") from exc
+            self._previous_slot = self._slot
+            self._slot = ModelSlot(new_model, self._model_version)
             self._metrics.incr("model_load_success")
+            logger.info("=" * 60)
+            logger.info("  LOAD COMPLETE name=%s  version=%s", self._model_name, self._model_version)
+            logger.info("=" * 60)
 
     def rollback(self) -> bool:
-        with self._lock:
-            if self._previous_model is None:
-                self._metrics.incr("rollback_noop")
-                return False
-            self._current_model, self._previous_model = self._previous_model, self._current_model
-            self._metrics.incr("rollback_success")
-            logger.warning("rolled back to previous model name=%s version=%s", self._model_name, self._model_version)
-            return True
+        if self._previous_slot is None:
+            self._metrics.incr("rollback_noop")
+            return False
+        self._slot = self._previous_slot
+        self._previous_slot = None
+        self._metrics.incr("rollback_success")
+        logger.warning(
+            "rolled back model name=%s to version=%s",
+            self._model_name,
+            self._slot.version,
+        )
+        return True
 
     def validate_request(self, payload: Any) -> PredictionRequest:
         if not isinstance(payload, dict):
@@ -133,22 +175,26 @@ class InferenceService:
         return result
 
     def predict(self, request: PredictionRequest) -> PredictionResponse:
-        with self._lock:
-            model = self._current_model
-        if model is None:
+        slot = self._slot
+        if slot is None:
             self._metrics.incr("predict_unavailable")
             raise PredictionError("model is not loaded")
 
         self._metrics.incr("predict_attempts")
-        logger.info("predict request_id=%s records=%d", request.request_id, len(request.records))
+        logger.info(
+            "predict start request_id=%s records=%d model_version=%s",
+            request.request_id,
+            len(request.records),
+            slot.version,
+        )
         try:
-            raw_predictions = model.predict(request.records)
+            raw_predictions = slot.model.predict(request.records)
             predictions = self.validate_response(raw_predictions, len(request.records))
             self._metrics.incr("predict_success")
             return PredictionResponse(
                 predictions=predictions,
                 model_name=self._model_name,
-                model_version=self._model_version,
+                model_version=slot.version,
                 request_id=request.request_id,
             )
         except PredictionError:
