@@ -117,7 +117,9 @@ class InferenceService:
     def load_model(self) -> None:
         with self._load_lock:
             self._metrics.incr("model_load_attempts")
-            logger.info("loading model name=%s version=%s", self._model_name, self._model_version)
+            logger.info("=" * 60)
+            logger.info("  LOAD START   name=%s  version=%s", self._model_name, self._model_version)
+            logger.info("=" * 60)
             try:
                 new_model = self._repository.load(self._model_name, self._model_version)
             except Exception as exc:
@@ -132,7 +134,9 @@ class InferenceService:
             self._previous_slot = self._slot
             self._slot = ModelSlot(new_model, self._model_version)
             self._metrics.incr("model_load_success")
-            logger.info("model loaded name=%s version=%s", self._model_name, self._model_version)
+            logger.info("=" * 60)
+            logger.info("  LOAD COMPLETE name=%s  version=%s", self._model_name, self._model_version)
+            logger.info("=" * 60)
 
     def rollback(self) -> bool:
         if self._previous_slot is None:
